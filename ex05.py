@@ -16,20 +16,6 @@ import torchvision.transforms.functional as F_Transforms
 from torchvision.transforms import ConvertImageDtype
 
 
-def check_access(paths_dict):
-    print("Checking access permissions for directories and files:")
-    for key, path in paths_dict.items():
-        if os.path.exists(path):
-            if os.access(path, os.R_OK):
-                print(f"Read access granted to {key}: {path}")
-            else:
-                print(f"Read access denied to {key}: {path}")
-        else:
-            print(f"Path does not exist: {key}: {path}")
-
-# Usage:
-check_access(paths_dict)
-
 class FixationDataset(Dataset):
     def __init__(self, root_dir, image_file, fixation_file, image_transform=None, fixation_transform=None):
         self.root_dir = root_dir
@@ -192,8 +178,6 @@ def load_paths():
         'checkpoints_path': checkpoints_path,
         'predictions_path': predictions_path
     }
-
-    return paths_dict
 
 def show(imgs):
     if not isinstance(imgs, list):
