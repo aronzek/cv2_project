@@ -18,8 +18,8 @@ def aggregate_density_maps(density_maps):
 
 # Example usage:
 # Specify paths to the folder containing training images and fixation images
-training_images_folder = "/Users/cimmykwok/Desktop/CV2/project/data/cv2_training_data/images/train" #"training_images"
-fixation_images_folder = "/Users/cimmykwok/Desktop/CV2/project/data/cv2_training_data/fixations/train" #"fixation_images"
+training_images_folder = "data/images/train" #"training_images"
+fixation_images_folder = "data/fixations/train" #"fixation_images"
 
 # Load training images and fixation images
 training_image_paths = sorted(os.listdir(training_images_folder))
