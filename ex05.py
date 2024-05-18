@@ -88,51 +88,6 @@ def read_text_file(filename):
             lines.append(line)
     return lines
 
-def load_data(data_type):
-    image_transform = transforms.Compose([transforms.ToTensor(), EyeFixationTransform()])
-    fixation_transform = transforms.Compose([transforms.ToTensor(), EyeFixationTransform()])
-    paths_dict = load_paths()
-    root_dir = paths_dict['root_dir']
-    train_images_path = paths_dict['train_images_dir']
-    validation_images_path = paths_dict['validation_images_dir']
-    test_images_path = paths_dict['test_images_dir']
-    train_fixations_path = paths_dict['train_fixations_dir']
-    validation_fixations_path = paths_dict['validation_fixations_dir']
-    logfile_valid = paths_dict['logfile_valid']
-    logfile_training = paths_dict['logfile_train']
-    if (data_type == "train"):
-        fixation_ds = FixationDataset(root_dir, train_images_path, train_fixations_path, image_transform, fixation_transform)
-    elif (data_type == "valid"):
-        fixation_ds = FixationDataset(root_dir, validation_images_path, validation_fixations_path, image_transform, fixation_transform)
-
-    samples = []
-    for sample_index in range(fixation_ds.__len__()):
-        samples.append(fixation_ds.__getitem__(sample_index))
-        
-    fixation_loader = DataLoader(fixation_ds, batch_size=16)
-    
-    return fixation_loader
-
-def gaussian(window_size: int, sigma: float) -> torch.Tensor:
-    device, dtype = None, None
-    if isinstance(sigma, torch.Tensor):
-        device, dtype = sigma.device, sigma.dtype
-    x = torch.arange(window_size, device=device, dtype=dtype) - window_size // 2
-    if window_size % 2 == 0:
-        x = x + 0.5
-    gauss = torch.exp(-x.pow(2.0) / (2 * sigma ** 2))
-    return gauss / gauss.sum()
-
-def gaussian_kernel(window_size, sigma):
-    g = gaussian(window_size, sigma)
-    kernel = torch.matmul(g.unsqueeze(-1), g.unsqueeze(-1).t())
-    kernel = kernel.expand(3, 3, 25, 25)
-    return kernel
-
-def read_center_bias():
-    data = np.load(load_paths()['center_bias'])
-    return torch.tensor(data)
-
 def load_paths():
     root_dir = os.getcwd()
     data_dir = os.path.join(root_dir, 'data')
@@ -178,6 +133,55 @@ def load_paths():
         'checkpoints_path': checkpoints_path,
         'predictions_path': predictions_path
     }
+
+    return paths_dict
+
+
+def load_data(data_type):
+    image_transform = transforms.Compose([transforms.ToTensor(), EyeFixationTransform()])
+    fixation_transform = transforms.Compose([transforms.ToTensor(), EyeFixationTransform()])
+    paths_dict = load_paths()
+    root_dir = paths_dict['root_dir']
+    train_images_path = paths_dict['train_images_dir']
+    validation_images_path = paths_dict['validation_images_dir']
+    test_images_path = paths_dict['test_images_dir']
+    train_fixations_path = paths_dict['train_fixations_dir']
+    validation_fixations_path = paths_dict['validation_fixations_dir']
+    logfile_valid = paths_dict['logfile_valid']
+    logfile_training = paths_dict['logfile_train']
+    if (data_type == "train"):
+        fixation_ds = FixationDataset(root_dir, train_images_path, train_fixations_path, image_transform, fixation_transform)
+    elif (data_type == "valid"):
+        fixation_ds = FixationDataset(root_dir, validation_images_path, validation_fixations_path, image_transform, fixation_transform)
+
+    samples = []
+    for sample_index in range(fixation_ds.__len__()):
+        samples.append(fixation_ds.__getitem__(sample_index))
+        
+    fixation_loader = DataLoader(fixation_ds, batch_size=16)
+    
+    return fixation_loader
+
+def gaussian(window_size: int, sigma: float) -> torch.Tensor:
+    device, dtype = None, None
+    if isinstance(sigma, torch.Tensor):
+        device, dtype = sigma.device, sigma.dtype
+    x = torch.arange(window_size, device=device, dtype=dtype) - window_size // 2
+    if window_size % 2 == 0:
+        x = x + 0.5
+    gauss = torch.exp(-x.pow(2.0) / (2 * sigma ** 2))
+    return gauss / gauss.sum()
+
+def gaussian_kernel(window_size, sigma):
+    g = gaussian(window_size, sigma)
+    kernel = torch.matmul(g.unsqueeze(-1), g.unsqueeze(-1).t())
+    kernel = kernel.expand(3, 3, 25, 25)
+    return kernel
+
+def read_center_bias():
+    data = np.load(load_paths()['center_bias'])
+    return torch.tensor(data)
+
 
 def show(imgs):
     if not isinstance(imgs, list):
