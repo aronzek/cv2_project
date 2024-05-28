@@ -141,14 +141,15 @@ def load_data(data_type):
     image_transform = transforms.Compose([transforms.ToTensor(), EyeFixationTransform()])
     fixation_transform = transforms.Compose([transforms.ToTensor(), EyeFixationTransform()])
     paths_dict = load_paths()
-    root_dir = paths_dict['root_dir']
-    train_images_path = paths_dict['train_images_dir']
-    validation_images_path = paths_dict['validation_images_dir']
+    root_dir = paths_dict['data_dir']
+    train_images_path = paths_dict['train_images_txt']
+    validation_images_path = paths_dict['validation_images_txt']
     test_images_path = paths_dict['test_images_dir']
-    train_fixations_path = paths_dict['train_fixations_dir']
-    validation_fixations_path = paths_dict['validation_fixations_dir']
+    train_fixations_path = paths_dict['train_fixations_txt']
+    validation_fixations_path = paths_dict['validation_fixations_txt']
     logfile_valid = paths_dict['logfile_valid']
     logfile_training = paths_dict['logfile_train']
+
     if (data_type == "train"):
         fixation_ds = FixationDataset(root_dir, train_images_path, train_fixations_path, image_transform, fixation_transform)
     elif (data_type == "valid"):
@@ -202,7 +203,7 @@ def visualize_images(inputs, fixations, predictions):
 
 def save_network_outputs(predictions, epoch, input):
     paths = load_paths()
-    predictions_path = paths['predictions']
+    predictions_path = paths_dict['predictions_path']
 
     for i, pred in enumerate(predictions):
     # for i, pred in predictions:
@@ -229,7 +230,7 @@ eye_fixation_model = Eye_Fixation_CNN(resnet_model, center_bias)
 opt = optim.SGD(eye_fixation_model.parameters(), lr=0.1)
 epochs = 100
 paths_dict = load_paths()
-checkpoints_path = paths_dict['checkpoints']
+checkpoints_path = paths_dict['checkpoints_path']
 logfile_validation_path = paths_dict['logfile_valid']
 logfile_training_path = paths_dict['logfile_train']
 
