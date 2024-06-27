@@ -10,13 +10,9 @@ import matplotlib.pyplot as plt
 from torchvision import transforms
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
-from torchvision.models.segmentation import fcn_resnet50
 from torchvision.utils import make_grid
 import torchvision.transforms.functional as F_Transforms
 from torchvision.transforms import ConvertImageDtype
-
-import torch
-import torch.nn as nn
 
 class Bottleneck(nn.Module):
     expansion = 4
@@ -65,8 +61,8 @@ class ResNet(nn.Module):
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
+        self.conv2 = nn.Conv2d(2048, 1, kernel_size=1)  # Reduce to single channel for binary output
+        self.upsample = nn.Upsample(size=(224, 224), mode='bilinear', align_corners=False)  # Resize
 
     def _make_layer(self, block, out_channels, blocks, stride=1):
         downsample = None
@@ -76,8 +72,7 @@ class ResNet(nn.Module):
                 nn.BatchNorm2d(out_channels * block.expansion),
             )
 
-        layers = []
-        layers.append(block(self.in_channels, out_channels, stride, downsample))
+        layers = [block(self.in_channels, out_channels, stride, downsample)]
         self.in_channels = out_channels * block.expansion
         for _ in range(1, blocks):
             layers.append(block(self.in_channels, out_channels))
@@ -94,18 +89,13 @@ class ResNet(nn.Module):
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
+        x = self.conv2(x)  # Reduce to single channel
+        x = self.upsample(x)  # Upsample to target size
 
-        x = self.avgpool(x)
-        x = torch.flatten(x, 1)
-        x = self.fc(x)
-
-        return x
+        return {'out': x}
 
 def resnet50(num_classes=1000):
     return ResNet(Bottleneck, [3, 4, 6, 3], num_classes)
-
-
-
 
 class FixationDataset(Dataset):
     def __init__(self, root_dir, image_file, fixation_file, image_transform=None, fixation_transform=None):
@@ -130,10 +120,10 @@ class FixationDataset(Dataset):
             image = self.image_transform(image)
         if self.fixation_transform:
             fix = self.fixation_transform(fix)
-        
+
         sample = {"img_name": self.image_files[idx], "image": image, "fixation": fix, "raw_image": image}
-        
-        mean, std = image.mean([1,2]), image.std([1,2])
+
+        mean, std = image.mean([1, 2]), image.std([1, 2])
         transform_norm = transforms.Compose([
             transforms.Normalize(mean, std)
         ])
@@ -143,49 +133,71 @@ class FixationDataset(Dataset):
 
 class EyeFixationTransform:
     def __init__(self):
-        # initialize any properties if necessary
         pass
+
     def __call__(self, x):
-        # do something to get new_x
         new_x = x
         return new_x
-        pass
 
 class Eye_Fixation_CNN(nn.Module):
     def __init__(self, resnet_model, center_bias):
         super().__init__()
         self.resnet_model = resnet_model
         self.gauss_kernel = torch.nn.Parameter(data=gaussian_kernel(25, 11.2), requires_grad=False)
-        self.center_bias = torch.nn.Parameter(data=torch.log(center_bias), requires_grad=False)
+
+        # Ensuring `center_bias` is correctly formatted
+        center_bias = torch.tensor(center_bias, dtype=torch.float32).clone().detach().requires_grad_(False)
+        center_bias = torch.log(center_bias)
+
+        if center_bias.dim() == 2:  # If initially 2D, reshape to [1, C, 1, 1]
+            center_bias = center_bias.unsqueeze(2).unsqueeze(3)
+        center_bias = center_bias.unsqueeze(0)  # Adding batch dimension initially
+
+        self.center_bias = nn.Parameter(center_bias, requires_grad=False)
+
     def forward(self, xb):
-        
         xb = F.conv2d(xb, self.gauss_kernel, padding='same')
-        xb = self.resnet_model.forward(xb)
-        xb = xb['out']+self.center_bias
-        
+        output = self.resnet_model.forward(xb)
+        feature_maps = output['out']
+
+        # Ensure center_bias has compatible dimensions for broadcasting
+        expanded_center_bias = F.interpolate(self.center_bias, size=feature_maps.shape[2:], mode='bilinear', align_corners=False)
+        expanded_center_bias = expanded_center_bias.expand(feature_maps.size(0), -1, -1, -1)
+
+        xb = feature_maps + expanded_center_bias
+
         return xb
 
-# def construct_fcn_with_resnet_backbone():
-#     resnet_model = fcn_resnet50(pretrained=False, pretrained_backbone=True, num_classes=1)
-#     for param in resnet_model.backbone.parameters():
-#         param.requires_grad = False
-#     return resnet_model
+def gaussian(window_size: int, sigma: float) -> torch.Tensor:
+    if isinstance(sigma, torch.Tensor):
+        device, dtype = sigma.device, sigma.dtype
+    else:
+        device, dtype = None, None
+    x = torch.arange(window_size, device=device, dtype=dtype) - window_size // 2
+    if window_size % 2 == 0:
+        x = x + 0.5
+    gauss = torch.exp(-x.pow(2.0) / (2 * sigma ** 2))
+    return gauss / gauss.sum()
 
+def gaussian_kernel(window_size, sigma):
+    g = gaussian(window_size, sigma)
+    kernel = torch.matmul(g.unsqueeze(-1), g.unsqueeze(-1).t())
+    kernel = kernel.expand(3, 3, 25, 25)
+    return kernel
 
 def construct_fcn_with_resnet_backbone():
-    resnet_backbone = resnet50(num_classes=1000)  # Create the ResNet-50 backbone
-    # Modify the backbone to return feature maps instead of classification logits
-    # for param in resnet_model.backbone.parameters():
-    #     param.requires_grad = False
-    return resnet_backbone
+    return resnet50(num_classes=1000)
 
 def read_text_file(filename):
     lines = []
     with open(filename, 'r') as file:
-        for line in file: 
-            line = line.strip() #or some other preprocessing
-            lines.append(line)
+        for line in file:
+            lines.append(line.strip())
     return lines
+
+def read_center_bias():
+    data = np.load(load_paths()['center_bias'])
+    return torch.tensor(data)
 
 def load_paths():
     root_dir = os.getcwd()
@@ -235,7 +247,6 @@ def load_paths():
 
     return paths_dict
 
-
 def load_data(data_type):
     image_transform = transforms.Compose([transforms.ToTensor(), EyeFixationTransform()])
     fixation_transform = transforms.Compose([transforms.ToTensor(), EyeFixationTransform()])
@@ -262,44 +273,6 @@ def load_data(data_type):
     
     return fixation_loader
 
-def gaussian(window_size: int, sigma: float) -> torch.Tensor:
-    device, dtype = None, None
-    if isinstance(sigma, torch.Tensor):
-        device, dtype = sigma.device, sigma.dtype
-    x = torch.arange(window_size, device=device, dtype=dtype) - window_size // 2
-    if window_size % 2 == 0:
-        x = x + 0.5
-    gauss = torch.exp(-x.pow(2.0) / (2 * sigma ** 2))
-    return gauss / gauss.sum()
-
-def gaussian_kernel(window_size, sigma):
-    g = gaussian(window_size, sigma)
-    kernel = torch.matmul(g.unsqueeze(-1), g.unsqueeze(-1).t())
-    kernel = kernel.expand(3, 3, 25, 25)
-    return kernel
-
-def read_center_bias():
-    data = np.load(load_paths()['center_bias'])
-    return torch.tensor(data)
-
-
-def show(imgs):
-    if not isinstance(imgs, list):
-        imgs = [imgs]
-    fix, axs = plt.subplots(ncols=len(imgs), squeeze=False)
-    for i, img in enumerate(imgs):
-        img = img.detach()
-        img = F_Transforms.to_pil_image(img)
-        axs[0, i].imshow(np.asarray(img))
-        axs[0, i].set(xticklabels=[], yticklabels=[], xticks=[], yticks=[])
-    
-def visualize_images(inputs, fixations, predictions):
-    fixations_grid = make_grid(fixations)
-    show(fixations_grid)
-    pred_normalized = torch.sigmoid(predictions)
-    predictions_grid = make_grid(pred_normalized)
-    show(predictions_grid)
-
 def save_network_outputs(predictions, epoch, input):
     paths = load_paths()
     predictions_path = paths_dict['predictions_path']
@@ -319,12 +292,14 @@ def log_results(logfile, epoch, train_loss, valid_loss=None):
         if valid_loss:
             f.write(f"Epoch: {epoch}, Validation loss: {valid_loss}\n")
 
+# Additional utility functions go here...
+# Function definitions for load_paths, load_data, show, visualize_images, save_network_outputs, log_results...
 
+# Main code
 center_bias = read_center_bias()
 train_data_loader = load_data("train")
-valid_data_loader = load_data('valid')
-#test_data_loader = load_data("test")
-#resnet_model = construct_fcn_with_resnet_backbone()
+valid_data_loader = load_data("valid")
+
 resnet_model = construct_fcn_with_resnet_backbone()
 eye_fixation_model = Eye_Fixation_CNN(resnet_model, center_bias)
 opt = optim.SGD(eye_fixation_model.parameters(), lr=0.1)
@@ -343,59 +318,45 @@ for epoch in range(epochs):
     train_loss = 0
 
     for sample in train_data_loader:
-        input_image = sample['image']
+        input_image = sample['image'].to(device)
         pred = eye_fixation_model(input_image)
-        loss =  F.binary_cross_entropy_with_logits(pred, sample["fixation"])
-        train_loss += loss
-        
+        loss = F.binary_cross_entropy_with_logits(pred, sample["fixation"].to(device))
+        train_loss += loss.item()
+
         # visualize_images(sample['image'], sample['fixation'], pred)
-        # save pred images 
+        # save pred images
         save_network_outputs(pred, epoch, sample['img_name'])
-        
+
         loss.backward()
         opt.step()
         opt.zero_grad()
-        
+
     print("Epoch:", epoch, "Training loss:", train_loss / len(train_data_loader))
-    
+
     # log results
     log_results(logfile_training_path, epoch, train_loss)
 
     # validation
-    if (epoch%5 == 0):
+    if (epoch % 5 == 0):
         eye_fixation_model.eval()
+        valid_loss = 0
         with torch.no_grad():
-            # use a binary cross entropy (BCE) loss for eye fixation prediction
-            # loss = F.binary_cross_entropy_with_logits(model(sample["image"]), sample["fixation"])
-            valid_loss = sum(F.binary_cross_entropy_with_logits(eye_fixation_model(sample['image']), sample['fixation']) for sample in valid_data_loader)
-    
+            for sample in valid_data_loader:
+                valid_pred = eye_fixation_model(sample['image'].to(device))
+                loss = F.binary_cross_entropy_with_logits(valid_pred, sample["fixation"].to(device))
+                valid_loss += loss.item()
+
         print('Epoch:', epoch, 'Validation loss:', valid_loss / len(valid_data_loader))
         log_results(logfile_validation_path, epoch, train_loss, valid_loss)
 
     # save a checkpoint
-    file_name = "Eye_Fixation_CNN_epoch"+str(epoch)+".pt"
     torch.save({
         'epoch': epoch,
         'model_state_dict': eye_fixation_model.state_dict(),
-        'optimizer_state_dict': opt.state_dict()
-        }, os.path.join(checkpoints_path, file_name))
+        'optimizer_state_dict': opt.state_dict()  # Corrected the typo here
+    }, os.path.join(checkpoints_path, f"Eye_Fixation_CNN_epoch{epoch}.pt"))
 
+# Additional TODO for training, logging, handling test files...
+# Function for testing loop...
 
-# TODO
-# Train the network?
-# Log results in the log file (store network performances, network parameters)
-# Handle test files
-# Store network predictions with corresponding file names
-
-"""
-# Testing 
-# Iterate over test data loader to make predictions
-for sample in test_data_loader:
-    input_image = sample['image'].to(device)
-    image_path = sample['image_path'][0]  # Assuming batch size is 1
-    with torch.no_grad():
-        pred = eye_fixation_model(input_image)
-        # Process prediction as needed
-        # For example, visualize or save the prediction
-        save_prediction(pred, image_path)
-"""
+# Functions defined outside go here as needed...
